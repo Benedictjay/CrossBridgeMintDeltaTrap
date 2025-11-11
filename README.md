@@ -1,9 +1,4 @@
 # CrossBridgeMintDeltaTrap
-Here is the clean README written specifically for the exact code you shared.
-No markdown. No fluff. Clear. Direct. Matches your repo.
-
----
-
 README — CrossBridgeMintDeltaTrap
 
 Overview
