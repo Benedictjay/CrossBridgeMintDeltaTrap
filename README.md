@@ -1,16 +1,14 @@
 # CrossBridgeMintDeltaTrap
-
-# CrossBridgeMintDeltaTrap
-
 ## Overview
 
-CrossBridgeMintDeltaTrap watches a bridged token’s supply vs locked balance on a designated bridge contract. If the on‑chain token total supply grows significantly beyond the bridge’s locked amount (exceeding a configurable threshold in basis points), the trap flags the situation as anomalous.
+CrossBridgeMintDeltaTrap monitors bridged ERC‑20 tokens and detects anomalies when the token total supply exceeds the bridge’s locked balance beyond a configurable threshold (default 5% / 500 basis points). The trap is Drosera-compatible and enables automated alerts for unusual minting or bridge misaccounting.
+
 This repository contains:
 
-* `src/CrossBridgeMintDeltaTrap.sol` — the trap contract implementing ITrap interface.
-* `src/CrossBridgeMintDeltaResponse.sol` — the responder contract invoked when the trap triggers.
-* `drosera.toml` — sample configuration for deployment in a Drosera / similar relay environment.
-* `README.md` — this documentation and test instructions.
+* `src/CrossBridgeMintDeltaTrap.sol` — main trap contract implementing `ITrap`.
+* `src/CrossBridgeMintDeltaResponse.sol` — response contract handling alerts and logging reports.
+* `drosera.toml` — sample Drosera configuration.
+* `README.md` — this documentation and testing guide.
 
 ---
 
@@ -18,104 +16,82 @@ This repository contains:
 
 **State Variables**
 
-* `address token` — ERC‑20 token contract whose total supply is monitored.
-* `address bridge` — bridge contract address controlling locked token amounts.
-* `uint256 thresholdBP` — threshold in basis points (1 basis point = 0.01 %) beyond which a delta triggers a response.
-* `uint256 lastSnapshotSupply` — optional snapshot of last read total supply.
-* `uint256 lastSnapshotLocked` — optional snapshot of last read locked balance.
+* `address token` — ERC-20 token contract.
+* `address bridge` — bridge contract managing locked tokens.
+* `uint256 DEFAULT_THRESHOLD_BP` — anomaly threshold in basis points (500 = 5%).
 
 **collect() Function**
-When called (view mode):
 
-1. Reads `uint256 totalSupply = IERC20(token).totalSupply()`.
-2. Reads `uint256 locked = IBridge(bridge).lockedBalance(token)`.
-3. Computes deltaBP = ( (totalSupply > locked) ? (totalSupply − locked) * 10,000 / locked : 0 ).
-4. Compares deltaBP to `thresholdBP`.
-5. Encodes the result into bytes:
+* Reads `totalSupply` from the token contract.
+* Reads `lockedBalance` from the bridge.
+* Computes delta in basis points: `deltaBP = ((total - locked) * 10_000) / locked`.
+* Marks `isAnomalous = true` if `deltaBP > DEFAULT_THRESHOLD_BP`.
+* Returns encoded `BridgeSupplyData` struct:
 
-   ````abi.encode(
-       address token,
-       address bridge,
-       uint256 totalSupply,
-       uint256 locked,
-       uint256 deltaBP,
-       uint256 thresholdBP,
-       uint256 timestamp,
-       bool isAnomalous
-   )```
-   ````
-6. Returns that bytes payload.
+  ```solidity
+  struct BridgeSupplyData {
+      address token;
+      address bridge;
+      uint256 totalSupply;
+      uint256 lockedBalance;
+      uint256 deltaBP;
+      uint256 thresholdBP;
+      uint256 timestamp;
+      bool isAnomalous;
+  }
+  ```
 
 **shouldRespond(bytes[] calldata data) Function**
 
-* Expects `data.length ≥ 1`; uses `data[0]`.
-* Decodes the payload returned by collect().
-* If `isAnomalous == true`, returns `(true, abi.encode(address token, address bridge, uint256 deltaBP))`.
-* Else returns `(false, bytes(""))`.
-* This enables the relay or automated system to trigger the responder contract when anomaly detected.
+* Decodes `BridgeSupplyData` from `data[0]`.
+* If `isAnomalous` is true, returns `(true, abi.encode(MESSAGE, abi.encode(latest)))`.
+* Otherwise returns `(false, bytes(""))`.
 
 **Response Contract Behaviour**
-Upon invocation (by relay when `shouldRespond` indicates true):
 
-* The responder emits an event **CrossBridgeMintAlert(token, bridge, deltaBP, timestamp)**.
-* Optionally logs data for off‑chain monitoring or storage.
+* Emits `CrossBridgeMintAlert(token, bridge, deltaBP, thresholdBP, timestamp)`.
+* Stores reports internally with `Report` struct.
+* Events allow off-chain monitoring of anomalies.
 
 ---
 
 ## Deployment Steps
 
-1. Use `forge build` to compile contracts.
-2. Deploy `CrossBridgeMintDeltaResponse.sol`. Note its address as `RESPONSE_CONTRACT_ADDRESS`.
-3. Deploy `CrossBridgeMintDeltaTrap.sol`.
-4. Call `setAddresses(tokenAddress, bridgeAddress)` on the trap contract.
-5. Optionally call `setThresholdBP(value)` to adjust the basis‑point threshold.
-6. Prepare `drosera.toml` like below and set:
+1. Compile contracts:
 
-   ```toml
-   ethereum_rpc = "https://your‑rpc.endpoint"
-   drosera_rpc = "https://relay.endpoint"
-   eth_chain_id = <chain_id>
-
-   [traps.crossbridge_mint_delta]
-   path = "out/CrossBridgeMintDeltaTrap.sol/CrossBridgeMintDeltaTrap.json"
-   response_contract = "0xRESPONSE_CONTRACT_ADDRESS"
-   response_function = "respondWithCrossBridgeMintAlert(address,address,uint256)"
-   cooldown_period_blocks = 100
-   private_trap = true
-   whitelist = ["YOUR_OPERATOR_ADDRESS"]
+   ```bash
+   forge build
    ```
+2. Deploy `CrossBridgeMintDeltaResponse.sol` and note its address.
+3. Deploy `CrossBridgeMintDeltaTrap.sol`.
+4. Call `setAddresses(tokenAddress, bridgeAddress)` on the trap.
+5. Update `drosera.toml` with `response_contract` and `whitelist`.
+6. Run `drosera apply` to register the trap with a relay.
 
 ---
 
 ## Foundry Test / cast Examples
 
-### 1) `collect()` Call (read‑only)
+### 1) collect() Call
 
 ```bash
 COLLECT_RAW=$(cast call --rpc-url <RPC_URL> <TRAP_ADDRESS> "collect()")
 cast abi-decode "(address,address,uint256,uint256,uint256,uint256,uint256,bool)" "$COLLECT_RAW"
 ```
 
-Example decoded output:
+Decoded output:
 
-* token address: `0xToken…`
-* bridge address: `0xBridge…`
-* totalSupply: `1000000`
-* locked: `900000`
-* deltaBP: `1111` (i.e., ~11.11 %)
-* thresholdBP: `500`
-* timestamp: `1699999999`
-* isAnomalous: `true`
+* `token`, `bridge` addresses
+* `totalSupply`, `lockedBalance`
+* `deltaBP`, `thresholdBP`
+* `timestamp`, `isAnomalous`
 
-Interpretation: Supply exceeds locked by ~11.11 % which is above the threshold of 5.00 % (500 bp), so trap marks anomaly.
+### 2) shouldRespond(bytes[]) via Foundry Script
 
-### 2) `shouldRespond(bytes[])` Call
-
-Using Foundry script is simpler; example script below.
-Create file `script/TestCrossBridgeMintDeltaTrap.s.sol`:
+Create `script/TestCrossBridgeMintDeltaTrap.s.sol`:
 
 ```solidity
-// SPDX‑License‑Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
@@ -131,9 +107,7 @@ contract TestCrossBridgeMintDeltaTrap is Script {
         string memory RPC = vm.envString("RPC_URL");
         address trap = vm.envAddress("TRAP_ADDRESS");
 
-        vm.broadcast();
         IBridgeMintDeltaTrap t = IBridgeMintDeltaTrap(trap);
-
         bytes memory collected = t.collect();
         console.log("collect() raw:", toHexString(collected));
 
@@ -153,10 +127,9 @@ contract TestCrossBridgeMintDeltaTrap is Script {
         console.log("shouldRespond ->", should ? "true" : "false");
 
         if (should) {
-            (address ptkn, address pbridge, uint256 pdeltaBP) = abi.decode(payload, (address,address,uint256));
-            console.log("payload token:", toHexString(abi.encodePacked(ptkn)));
-            console.log("payload bridge:", toHexString(abi.encodePacked(pbridge)));
-            console.log("payload deltaBP:", pdeltaBP);
+            (string memory msgText, bytes memory dataEncoded) = abi.decode(payload, (string, bytes));
+            console.log("payload message:", msgText);
+            console.log("payload encoded data length:", dataEncoded.length);
         }
     }
 
@@ -166,54 +139,43 @@ contract TestCrossBridgeMintDeltaTrap is Script {
         str[0] = "0";
         str[1] = "x";
         for (uint i = 0; i < data.length; ++i) {
-            str[2 + i * 2] = alphabet[uint(uint8(data[i] >> 4))];
-            str[3 + i * 2] = alphabet[uint(uint8(data[i] & 0x0f))];
+            str[2 + i*2] = alphabet[uint(uint8(data[i] >> 4))];
+            str[3 + i*2] = alphabet[uint(uint8(data[i] & 0x0f))];
         }
         return string(str);
     }
 }
 ```
 
-#### Running the script
+Run the script:
 
 ```bash
-export RPC_URL="https://your‑rpc.endpoint"
+export RPC_URL="https://ethereum-hoodi-rpc.publicnode.com"
 export TRAP_ADDRESS="0xYourTrapAddressHere"
-
 forge script script/TestCrossBridgeMintDeltaTrap.s.sol:TestCrossBridgeMintDeltaTrap --rpc-url $RPC_URL --broadcast
 ```
 
-### 3) Alternate cast‑only approach (advanced)
+### 3) Alternate cast-only Approach (Advanced)
 
-If you want to skip Foundry script:
-
-* First fetch `COLLECT_RAW`.
-* Then encode array of bytes:
-
-  ```bash
-  DATA=$(cast abi-encode "(bytes)" "$COLLECT_RAW")
-  ARRAY=$(cast abi-encode "(bytes[])" "[$DATA]")
-  ```
-* Call:
-
-  ```bash
-  cast call --rpc-url <RPC_URL> <TRAP_ADDRESS> "shouldRespond(bytes[])" "$ARRAY"
-  ```
-* Decode returned `(bool, bytes)` via `cast abi-decode`.
+```bash
+DATA=$(cast abi-encode "(bytes)" "$COLLECT_RAW")
+ARRAY=$(cast abi-encode "(bytes[])" "[$DATA]")
+cast call --rpc-url <RPC_URL> <TRAP_ADDRESS> "shouldRespond(bytes[])" "$ARRAY"
+```
 
 ---
 
 ## Purpose
 
-This trap adds a security layer for bridging systems. It ensures token supply growth beyond locked amounts does not go unnoticed. It helps expose minting bugs, mis‑accounting or malicious token inflation on bridge systems.
+Ensures on-chain token supply does not exceed locked bridge balances beyond safe limits. Detects mis-minting, bridge accounting errors, and potential exploits.
 
 ---
 
 ## Files
 
-* `src/CrossBridgeMintDeltaTrap.sol` — main trap contract
+* `src/CrossBridgeMintDeltaTrap.sol` — main trap
 * `src/CrossBridgeMintDeltaResponse.sol` — response contract
-* `drosera.toml` — sample relay‑config
+* `drosera.toml` — sample Drosera configuration
 * `README.md` — this file
 
 ---
