@@ -1,0 +1,15 @@
+ethereum_rpc = "https://ethereum-hoodi-rpc.publicnode.com" 
+drosera_rpc = "https://relay.hoodi.drosera.io" 
+eth_chain_id = 560048 
+drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+
+[traps.crossbridgedelta]
+path = "out/CrossBridgeMintDeltaTrap.sol/CrossBridgeMintDeltaTrap.json"
+response_contract = "0x7494b23814792715f9D7F259fEE635Fc0F14c596"
+response_function = "respond(string,bytes)"
+cooldown_period_blocks = 30
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 10
+private_trap = true
+whitelist = ["0x6cd249c1d0b196a1819dad3b1e385ddbab917742"] 
